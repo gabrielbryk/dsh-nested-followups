@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Made Host compatibility fixtures platform-independent so the fork's full
+  validation suite runs on Linux, where Gabe's DSH deployment lives.
+- Validated the fork against Gabe's pinned DeepSeek Harness
+  `0.1.2-alpha.1` deployment without changing its read-only branch semantics.
 - Rebuilt the English and Chinese README introductions around the project's
   defining behavior: every answer at every depth can become another isolated
   fork point, with no plugin-defined nesting limit.

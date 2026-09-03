@@ -234,7 +234,7 @@ async function setup(branches: MemoryTable<BranchRecord> = new MemoryTable<Branc
 
   const root = ctx.sessions.create(SessionId('root'), {
     seed: textTurn(0, 1, 'q1', 'a1', 'root question', 'root answer'),
-    meta: { cwd: 'D:\\workspace\\project' },
+    meta: { cwd: '/workspace/project' },
   })
   return {
     ctx,

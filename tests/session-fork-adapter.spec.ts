@@ -65,7 +65,7 @@ describe('rc.7 subagent fork adapter', () => {
         ...textTurn(0, 1, 'q1', 'a1', 'first question', 'first answer'),
         ...textTurn(6, 2, 'q2', 'a2', 'later question', 'later answer'),
       ],
-      meta: { cwd: 'D:\\workspace\\project' },
+      meta: { cwd: '/workspace/project' },
     })
 
     const official = sessions.fork(source, 5, SessionId('official-child'))
@@ -73,7 +73,7 @@ describe('rc.7 subagent fork adapter', () => {
 
     expect(inheritedSeed(adapted)).toEqual(inheritedSeed(official))
     expect(adapted.header).toMatchObject({
-      cwd: 'D:\\workspace\\project',
+      cwd: '/workspace/project',
       parentSession: source.id,
       seedLength: 6,
       origin: 'subagent',
