@@ -71,4 +71,27 @@ describe('context preview', () => {
   it('does not invent a preview for an unknown node', () => {
     expect(deriveContextPreview(nestedContextPreviewProjectionFixture(), 'missing')).toBeUndefined()
   })
+
+  it('rejects a malformed cycle in the target ancestor chain', () => {
+    const fixture = nestedContextPreviewProjectionFixture()
+    const projection = {
+      ...fixture,
+      branches: fixture.branches.map((branch) => {
+        if (branch.record.branchId !== 'branch-1') return branch
+        return {
+          ...branch,
+          anchorNodeId: 'nested-a',
+          record: {
+            ...branch.record,
+            parentBranchId: 'branch-1-1',
+            parentSessionId: 'nested-session',
+            anchorSessionId: 'nested-session',
+            anchorMessageId: 'nested-a',
+          },
+        }
+      }),
+    }
+
+    expect(deriveContextPreview(projection, 'nested-a')).toBeUndefined()
+  })
 })

@@ -82,6 +82,7 @@ export function deriveContextPreview(
   if (cursor === undefined) return undefined
 
   const segments: (readonly MessageNodeView[])[] = []
+  const visitedBranchIds = new Set<string>()
   while (true) {
     const segment = sessionPrefixThrough(graph, cursor)
     if (segment === undefined) return undefined
@@ -91,6 +92,9 @@ export function deriveContextPreview(
       if (cursor.sessionId !== projection.tree.rootSessionId) return undefined
       break
     }
+
+    if (visitedBranchIds.has(cursor.branchId)) return undefined
+    visitedBranchIds.add(cursor.branchId)
 
     const branch = graph.branchesById.get(cursor.branchId)
     const anchor = graph.anchorNodesByBranchId.get(cursor.branchId)
