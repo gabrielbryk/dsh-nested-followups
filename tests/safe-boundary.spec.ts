@@ -24,11 +24,14 @@ function openTurn(startSeq: number, turn: number): SessionEvent[] {
       surfaceOp: 'append',
     }),
     event({ type: 'step/start', seq: startSeq + 2, time: 2_002, data: { turn, step: 1 } }),
+    // Session format v2 replaced the per-chunk events with one durable
+    // settlement per attempt; an attempt that committed no surface message
+    // lands as `assistant/attempt`, which is not a branchable boundary.
     event({
-      type: 'assistant/chunk',
+      type: 'assistant/attempt',
       seq: startSeq + 3,
       time: 2_003,
-      data: { turn, step: 1, chunk: { type: 'text-delta', text: 'partial' } },
+      data: { turn, step: 1, stream: [] },
     }),
   ]
 }

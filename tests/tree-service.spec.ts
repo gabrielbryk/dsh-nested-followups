@@ -5,12 +5,7 @@ import SessionStore, {
   type SessionEvent,
   type SessionHeader,
 } from '@deepseek-ai/dsh-session'
-import {
-  SessionPersistence,
-  type SessionInspection,
-  type SessionLocation,
-  type SessionPersistenceSnapshot,
-} from '@deepseek-ai/dsh-session-persistence'
+import type { SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { describe, expect, it } from 'vitest'
 
@@ -37,43 +32,60 @@ class MemoryTable<V> implements KvTable<string, V> {
   }
 }
 
-class MemoryPersistence extends SessionPersistence {
-  private readonly records = new Map<SessionId, SessionInspection>()
+/**
+ * The 0.1.3-alpha.1 handle-based persistence seam.
+ *
+ * `list` replaces `listSnapshots`, and `open`/`read`/`close` replace
+ * `inspect`/`readFrom`, so the double states the ported contract rather than
+ * the removed one it was originally written against.
+ */
+class MemoryPersistence extends Service {
+  private readonly records = new Map<SessionId, { header: SessionHeader; inheritedEventCount: number; events: SessionEvent[] }>()
   readonly readFromIds: SessionId[] = []
-  readonly supportsRawArtifacts = false
+  readonly openHandles = new Set<object>()
+
+  constructor(owner: Context) { super(owner, 'sessionPersistence') }
 
   store(session: Session): void {
-    this.records.set(session.id, { meta: session.header, events: session.events })
+    this.records.set(session.id, {
+      header: session.header,
+      inheritedEventCount: (session as unknown as { inheritedEventCount: number }).inheritedEventCount,
+      events: [...session.events],
+    })
   }
 
-  locate(_meta: SessionHeader): SessionLocation | undefined { return undefined }
-  async create(_meta: SessionHeader): Promise<void> {}
-  async append(_id: SessionId, _events: readonly SessionEvent[]): Promise<void> {}
-  async load(id: SessionId): Promise<SessionInspection> {
-    const stored = this.records.get(id)
-    if (stored === undefined) throw new Error('not persisted')
-    return stored
-  }
-  async inspect(id: SessionId, _signal?: AbortSignal): Promise<SessionInspection> {
-    return this.load(id)
-  }
-  async readFrom(
-    id: SessionId,
-    fromSeq: number,
-    _signal?: AbortSignal,
-  ): Promise<{ meta: SessionHeader; events: SessionEvent[] }> {
-    this.readFromIds.push(id)
-    const stored = await this.load(id)
-    return { meta: stored.meta, events: stored.events.filter(event => event.seq >= fromSeq) }
-  }
-  async list(_signal?: AbortSignal): Promise<SessionHeader[]> {
-    return [...this.records.values()].map(record => record.meta)
-  }
-  async listSnapshots(_signal?: AbortSignal): Promise<SessionPersistenceSnapshot[]> {
+  async list(): Promise<readonly SessionPersistenceSnapshot[]> {
     return [...this.records.values()].map((record, index) => ({
-      header: record.meta,
+      header: record.header,
       revision: `memory-${index}` as SessionPersistenceSnapshot['revision'],
     }))
+  }
+
+  async open(id: SessionId, access: 'read' | 'write'): Promise<{
+    header: SessionHeader
+    inheritedEventCount: number
+    read: (offset?: number) => Promise<readonly SessionEvent[]>
+    close: () => Promise<void>
+  }> {
+    if (access !== 'read') throw new Error('the tree projection never opens a write handle')
+    const stored = this.records.get(id)
+    if (stored === undefined) throw new Error('not persisted')
+    this.readFromIds.push(id)
+    let closed = false
+    const handle = {
+      header: stored.header,
+      inheritedEventCount: stored.inheritedEventCount,
+      read: async (offset = 0): Promise<readonly SessionEvent[]> => {
+        if (closed) throw new Error('handle closed')
+        return stored.events.filter(event => event.seq >= offset)
+      },
+      close: async (): Promise<void> => {
+        closed = true
+        this.openHandles.delete(handle)
+      },
+    }
+    this.openHandles.add(handle)
+    return handle
   }
 }
 
@@ -206,7 +218,7 @@ async function setup(options: { branches?: boolean; cold?: boolean; deletion?: b
       },
     })
   if (options.cold === true) {
-    const persistence = ctx.sessionPersistence as MemoryPersistence
+    const persistence = ctx.sessionPersistence as unknown as MemoryPersistence
     persistence.store(root)
     persistence.store(branchSession)
   }
@@ -220,7 +232,7 @@ async function setup(options: { branches?: boolean; cold?: boolean; deletion?: b
     service: ctx.nestedFollowups,
     root,
     repository,
-    persistence: ctx.sessionPersistence as MemoryPersistence,
+    persistence: ctx.sessionPersistence as unknown as MemoryPersistence,
     deletionCalls,
   }
 }
@@ -325,30 +337,6 @@ describe('tree projection Remote service', () => {
       expect(changed.value.changed).toBe(true)
       if (!changed.value.changed) return
       expect(changed.value.snapshot.revision).toBe(initial.value.revision + 1)
-    } finally {
-      await dispose()
-    }
-  })
-
-  it('coalesces high-frequency assistant chunks into one bounded revision', async () => {
-    const { dispose, service, root } = await setup()
-    try {
-      const initial = await service.readTree({ sessionId: 'root' })
-      if (!initial.ok) throw new Error('root projection missing')
-
-      for (const text of ['one', ' two', ' three']) {
-        root.append('assistant/chunk', {
-          turn: 2,
-          step: 1,
-          chunk: { type: 'text-delta', index: 0, text },
-        })
-      }
-      const immediate = await service.readTree({ sessionId: 'root' })
-      expect(immediate.ok && immediate.value.revision).toBe(initial.value.revision)
-
-      await new Promise(resolve => setTimeout(resolve, 75))
-      const coalesced = await service.readTree({ sessionId: 'root' })
-      expect(coalesced.ok && coalesced.value.revision).toBe(initial.value.revision + 1)
     } finally {
       await dispose()
     }

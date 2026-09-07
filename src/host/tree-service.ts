@@ -1,7 +1,6 @@
 import { clearTimeout, setTimeout } from 'node:timers'
 import { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
-import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import type { SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 
@@ -21,10 +20,15 @@ import type { BranchRecord, TreeRecord } from '../shared/types.ts'
 import type { NestedFollowupsBranchService } from './branch-service.ts'
 import type { NestedFollowupsDeleteService } from './delete-service.ts'
 import type { NestedFollowupsMetadataService } from './metadata-service.ts'
+import {
+  listStoredSessions,
+  liveSeedLength,
+  liveSessionEvents,
+  readStoredSessionFrom,
+} from './adapter/session-log.ts'
 import { isDirectlyDeleted, projectConversationTree, type SessionLogSnapshot } from './projection.ts'
 
 const WATCH_TIMEOUT_MS = 15_000
-const STREAM_TOUCH_INTERVAL_MS = 50
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -98,8 +102,8 @@ export class NestedFollowupsService extends TypertRemoteService {
 
   constructor(ctx: Context) {
     super(ctx, 'nestedFollowups')
-    ctx.on('session/event', (session, event) => {
-      this.onSessionEvent(String(session.id), event)
+    ctx.on('session/event', (session) => {
+      this.onSessionEvent(String(session.id))
     }, { global: true })
     ctx.on('nested-followups/change', (rootSessionId) => {
       this.touchRoot(rootSessionId)
@@ -126,29 +130,24 @@ export class NestedFollowupsService extends TypertRemoteService {
     for (const listener of listeners) listener(true)
   }
 
-  private onSessionEvent(sessionId: string, event: SessionEvent): void {
+  /** A durable append always supersedes a coalescing live-text touch. */
+  private onSessionEvent(sessionId: string): void {
     const rootSessionId = this.rootSessionIdFor(sessionId)
-    if (event.type !== 'assistant/chunk') {
-      const pending = this.pendingStreamTouches.get(rootSessionId)
-      if (pending !== undefined) {
-        clearTimeout(pending)
-        this.pendingStreamTouches.delete(rootSessionId)
-      }
-      this.touchRoot(rootSessionId)
-      return
-    }
-    if (this.pendingStreamTouches.has(rootSessionId)) return
-    const timer = setTimeout(() => {
-      this.pendingStreamTouches.delete(rootSessionId)
-      if (!this.disposed) this.touchRoot(rootSessionId)
-    }, STREAM_TOUCH_INTERVAL_MS)
-    this.pendingStreamTouches.set(rootSessionId, timer)
+    this.cancelStreamTouch(rootSessionId)
+    this.touchRoot(rootSessionId)
+  }
+
+  private cancelStreamTouch(rootSessionId: string): void {
+    const pending = this.pendingStreamTouches.get(rootSessionId)
+    if (pending === undefined) return
+    clearTimeout(pending)
+    this.pendingStreamTouches.delete(rootSessionId)
   }
 
   /** Read a complete, de-duplicated projection without attaching cold Agents. */
   async readTree(request: TreeReadRequest): Promise<TreeReadResult> {
     const ownership = this.resolveOwnership(request.sessionId)
-    const persisted = await this.ctx.sessionPersistence.listSnapshots()
+    const persisted = await listStoredSessions(this.ctx.sessionPersistence)
     const persistedHeaders = snapshotHeaderMap(persisted)
     const requestedHeader = this.headerFor(request.sessionId, persistedHeaders)
     if (requestedHeader === undefined) return sessionNotFound(request.sessionId)
@@ -285,18 +284,22 @@ export class NestedFollowupsService extends TypertRemoteService {
   ): Promise<SessionLogSnapshot | undefined> {
     const live = this.liveSession(sessionId)
     if (live !== undefined) {
+      // `fromSeq` is a branch's own durable seed cut, which is a log position
+      // in the branch session: seq and log offset are the same number on a
+      // contiguous log, so it is passed through unconverted.
+      const seedLength = liveSeedLength(live)
       return {
         sessionId,
-        events: live.events.filter(event => event.seq >= fromSeq),
-        ...(live.header.seedLength === undefined ? {} : { seedLength: live.header.seedLength }),
+        events: liveSessionEvents(live, fromSeq),
+        ...(seedLength === undefined ? {} : { seedLength }),
       }
     }
     if (!persistedHeaders.has(sessionId)) return undefined
-    const stored = await this.ctx.sessionPersistence.readFrom(sessionId as SessionId, fromSeq)
+    const stored = await readStoredSessionFrom(this.ctx.sessionPersistence, sessionId as SessionId, fromSeq)
     return {
       sessionId,
       events: stored.events,
-      ...(stored.meta.seedLength === undefined ? {} : { seedLength: stored.meta.seedLength }),
+      ...(stored.seedLength === undefined ? {} : { seedLength: stored.seedLength }),
     }
   }
 

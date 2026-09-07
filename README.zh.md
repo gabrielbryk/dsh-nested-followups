@@ -138,15 +138,29 @@ _图中画出两层嵌套后以省略号继续：后续每一级的每条回答�
 
 | 项目 | 版本 |
 | --- | --- |
-| DeepSeek Harness | `0.1.x`（已在 `0.1.0-rc.7`、`0.1.0-rc.8` 和 `0.1.1-rc.2` 上验证） |
+| DeepSeek Harness | `>=0.1.3-alpha.1 <0.2.0`（基线 `0.1.3-alpha.1`，提交 `d347e703908d0406b7a7ef80e3a0e594d86b2215`） |
 | Node.js | 22.19 及以上 |
 | 包管理器 | pnpm |
 
 ## 兼容性说明
 
-当前版本已在未经修改的 `@deepseek-ai/dsh` `0.1.1-rc.2` 上验证，并继续以
-`0.1.0-rc.7` 作为兼容下限。DeepSeek Harness 仍处于开发者预览阶段，后续预发布
-版本可能需要更新适配器。
+当前版本面向未经修改的 `@deepseek-ai/dsh` `0.1.3-alpha.1`
+（`d347e703908d0406b7a7ef80e3a0e594d86b2215`），并以该版本作为兼容下限。
+DeepSeek Harness 仍处于开发者预览阶段，后续预发布版本可能需要更新适配器。
+
+**`0.1.3-alpha.1` 下限是硬性的。** 两个上游破坏性提交移除了本插件使用的全部
+Session 日志接口：`bec6805` 用按会话句柄（`open`/`read`/`close`）加
+`create`/`flush`/`stat`/`list` 取代了
+`SessionPersistence.inspect`/`readFrom`/`listSnapshots`；`f99b06e`（Session
+格式 v2）用 `snapshotEvents()` 取代了 `Session.events` 访问器，并把持久化的
+fork 切点从 Header（`header.seedLength`）移到与布尔 `header.isSeeded` 配对的
+独立 `inheritedEventCount`。这些调用全部收敛在
+`src/host/adapter/session-log.ts`。更早的 DeepSeek Harness 不提供这些接口。
+
+`0.1.3-alpha.1` 未发布到 npm，因此本包仍基于最后一个已发布版本
+（`0.1.1-rc.2`）构建与测试，并在 `tests/fixtures/session-format-v2.ts` 中把它
+适配到 v2 契约。构建通过只能说明内部一致，不能说明宿主兼容；部署用的 setup
+仓库会固定已审阅的 Harness 提交并拒绝不匹配的部署。
 
 **分支目前不能在原生 Chat 里续聊。** DSH 会拒绝从普通对话界面向 subagent-origin
 Session 发送用户消息，因此分支的阅读和续聊都在 Tree View 中完成。插件已经预留对

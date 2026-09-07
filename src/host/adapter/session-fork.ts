@@ -6,6 +6,7 @@ import {
   type SessionId,
   type SessionStore,
 } from '@deepseek-ai/dsh-session'
+import { liveSessionEvents, seededSessionStore } from './session-log.ts'
 import { hiddenBranchMetaRc7 } from './visibility.ts'
 
 /**
@@ -101,9 +102,11 @@ export function createSubagentForkRc7(
     )
   }
   const liveSource = resolveLiveSourceRc7(sessions, source)
-  const seed = selectForkSeedRc7(liveSource.id, liveSource.events, boundary)
-  return sessions.create(childSessionId, {
+  const seed = selectForkSeedRc7(liveSource.id, liveSessionEvents(liveSource), boundary)
+  return seededSessionStore(sessions).create(childSessionId, {
     seed,
+    // The seed is exactly the inherited prefix; its length is the durable cut.
+    inheritedEventCount: seed.length,
     meta: hiddenBranchMetaRc7(liveSource.header, seed.length),
   })
 }

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** ported the Host services to the DeepSeek Harness
+  `0.1.3-alpha.1` session seam
+  (`d347e703908d0406b7a7ef80e3a0e594d86b2215`) and raised the compatibility
+  floor to it. Upstream `bec6805` replaced
+  `SessionPersistence.inspect`/`readFrom`/`listSnapshots` with a per-session
+  handle (`open`/`read`/`close`) plus `list`, and `f99b06e` (session format v2)
+  replaced the `Session.events` accessor with `snapshotEvents()` and moved the
+  durable fork cut off the header (`header.seedLength`) onto a separate
+  `inheritedEventCount` paired with `header.isSeeded`. Every one of those calls
+  now goes through the new `src/host/adapter/session-log.ts`; branch creation
+  passes the cut as the `inheritedEventCount` creation option beside a
+  `meta.isSeeded` marker. Read handles are always closed in a `finally`.
+  Read-only branch semantics, tree projection, and the anchored-question flow
+  are unchanged.
+- Folded `interruptedTurnClosers` into the cold branch read, because the
+  removed `inspect` supplied synthetic closers for a log whose writer crashed
+  mid-turn and the raw handle read does not. The detached suffix read that
+  replaces `readFrom` deliberately does not fold them, matching the removed
+  primitive.
+- Adapted the validation suite to the v2 session contract
+  (`tests/fixtures/session-format-v2.ts`) so it exercises the ported seam while
+  the package continues to build against the last published DeepSeek Harness
+  line; `0.1.3-alpha.1` is not on the npm registry.
+
 ### Added
 
 - Added a 13.5-second demo recorded from a real DeepSeek Harness session. It

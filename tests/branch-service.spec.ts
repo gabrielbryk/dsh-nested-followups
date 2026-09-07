@@ -70,6 +70,11 @@ class MemoryPersistence extends SessionPersistence {
   }
   async list(_signal?: AbortSignal): Promise<SessionHeader[]> { return [] }
   async listSnapshots(_signal?: AbortSignal): Promise<SessionPersistenceSnapshot[]> { return [] }
+
+  /** 0.1.3-alpha.1 handle seam: nothing in this suite is cold-readable. */
+  async open(_id: SessionId, _access: 'read' | 'write'): Promise<never> {
+    throw new Error('not persisted')
+  }
 }
 
 interface ReadOnlySetupRecord {
@@ -140,10 +145,14 @@ class AgentsStub extends Service {
       this.failNextCreate = false
       throw new Error('injected branch session creation failure')
     }
+    // 0.1.3-alpha.1 carries the fork cut beside the metadata, so the registry
+    // forwards `inheritedEventCount` to the session boundary.
+    const inheritedEventCount = (options as { inheritedEventCount?: number }).inheritedEventCount
     const session = this.ctx.sessions.create(options.sessionId, {
       ...(options.seed === undefined ? {} : { seed: options.seed }),
       ...(options.meta === undefined ? {} : { meta: options.meta }),
-    })
+      ...(inheritedEventCount === undefined ? {} : { inheritedEventCount }),
+    } as never)
     return this.publish(session, options.setup)
   }
 
@@ -202,12 +211,9 @@ function appendOpenStreamingTurn(session: Session, turn: number, marker: string)
     content: [{ type: 'text', text: marker }],
     source: { kind: 'user' },
   }), { surfaceOp: 'append' })
+  // Session format v2 logs no per-chunk event, so an open turn whose model is
+  // still producing ends at `step/start`: nothing durable has committed yet.
   session.append('step/start', { turn, step: 1 })
-  session.append('assistant/chunk', {
-    turn,
-    step: 1,
-    chunk: { type: 'text-delta', index: 0, text: 'still streaming' },
-  })
 }
 
 async function setup(branches: MemoryTable<BranchRecord> = new MemoryTable<BranchRecord>()) {

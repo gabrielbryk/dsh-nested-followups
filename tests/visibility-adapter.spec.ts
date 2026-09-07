@@ -42,7 +42,7 @@ describe('rc.7 branch visibility adapter', () => {
     }, 12)).toEqual({
       cwd: 'D:\\workspace\\project',
       parentSession: 'parent',
-      seedLength: 12,
+      isSeeded: true,
       origin: 'subagent',
     })
   })

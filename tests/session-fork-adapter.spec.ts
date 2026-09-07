@@ -43,8 +43,13 @@ async function setup(): Promise<{ ctx: Context; sessions: SessionStore }> {
   return { ctx, sessions: ctx.sessions }
 }
 
+/** Session format v2 keeps the fork cut beside the header, not inside it. */
+function inheritedEventCount(session: Session): number {
+  return (session as unknown as { inheritedEventCount: number }).inheritedEventCount
+}
+
 function inheritedSeed(session: Session): readonly SessionEvent[] {
-  return session.events.slice(0, session.header.seedLength ?? 0)
+  return session.events.slice(0, inheritedEventCount(session))
 }
 
 function forkErrorCode(action: () => unknown): SessionForkErrorCode {
@@ -75,7 +80,7 @@ describe('rc.7 subagent fork adapter', () => {
     expect(adapted.header).toMatchObject({
       cwd: '/workspace/project',
       parentSession: source.id,
-      seedLength: 6,
+      isSeeded: true,
       origin: 'subagent',
     })
     expect(official.header.origin).toBeUndefined()
@@ -96,7 +101,7 @@ describe('rc.7 subagent fork adapter', () => {
     )
 
     expect(inheritedSeed(adapted)).toEqual(inheritedSeed(official))
-    expect(adapted.header.seedLength).toBe(official.header.seedLength)
+    expect(inheritedEventCount(adapted)).toBe(inheritedEventCount(official))
   })
 
   it('forks an earlier completed boundary while the source has a later open turn', async () => {
@@ -117,7 +122,7 @@ describe('rc.7 subagent fork adapter', () => {
     )
 
     expect(inheritedSeed(adapted)).toEqual(inheritedSeed(official))
-    expect(adapted.header.seedLength).toBe(6)
+    expect(inheritedEventCount(adapted)).toBe(6)
     expect(source.events.some(event => event.type === 'turn/start' && event.data.turn === 2)).toBe(true)
   })
 

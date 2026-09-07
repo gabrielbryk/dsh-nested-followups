@@ -161,16 +161,38 @@ inherited conversation again.
 
 | Requirement | Version |
 | --- | --- |
-| DeepSeek Harness | `0.1.x` (verified on `0.1.0-rc.7`, `0.1.0-rc.8`, and `0.1.1-rc.2`) |
+| DeepSeek Harness | `>=0.1.3-alpha.1 <0.2.0` (baseline `0.1.3-alpha.1`, commit `d347e703908d0406b7a7ef80e3a0e594d86b2215`) |
 | Node.js | 22.19 or later |
 | Package manager | pnpm |
 
 ## Compatibility notes
 
-This release is verified against an unmodified `@deepseek-ai/dsh`
-`0.1.1-rc.2` and keeps `0.1.0-rc.7` as its compatibility floor. DeepSeek
-Harness is still in developer preview, so later prereleases may require an
-adapter update.
+This release targets an unmodified `@deepseek-ai/dsh` `0.1.3-alpha.1`
+(`d347e703908d0406b7a7ef80e3a0e594d86b2215`), which is its compatibility floor.
+DeepSeek Harness is still in developer preview, so later prereleases may
+require an adapter update.
+
+**The `0.1.3-alpha.1` floor is hard.** Two breaking upstream commits removed
+every session-log surface this plugin used:
+
+- `bec6805` replaced `SessionPersistence.inspect` / `readFrom` /
+  `listSnapshots` with a per-session handle seam (`open`/`read`/`close`) plus
+  `create` / `flush` / `stat` / `list`.
+- `f99b06e` (session format v2) removed the `Session.events` accessor in
+  favour of `snapshotEvents()`, and moved the durable fork cut off the header
+  (`header.seedLength`) onto a separate `inheritedEventCount` paired with the
+  boolean `header.isSeeded`.
+
+The log surfaces are funnelled through `src/host/adapter/session-log.ts`.
+Earlier DeepSeek Harness lines do not expose those surfaces, so this release
+cannot run on them.
+
+`0.1.3-alpha.1` is not published to the npm registry, so the package still
+builds and tests against the last published line (`0.1.1-rc.2`) and adapts it
+to the v2 contract in `tests/fixtures/session-format-v2.ts`. A green build here
+therefore proves internal consistency, not harness compatibility; the deploying
+setup repository pins the exact reviewed harness commit and refuses to ship a
+mismatch.
 
 **Branches cannot be continued from the standard chat view.** DSH currently
 rejects user messages sent from the normal chat UI to a subagent-origin

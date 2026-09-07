@@ -41,6 +41,25 @@ export interface ReadOnlyResumeInput {
 
 export type BranchAgentRegistry = Pick<AgentRegistry, 'get' | 'create' | 'resume'>
 
+/**
+ * The seeded-child creation surface of the Agent registry.
+ *
+ * Session format v2 moved the fork cut out of `meta` and onto the sibling
+ * `inheritedEventCount` option, which the session boundary validates against
+ * the supplied seed. Described structurally so the plugin can keep building
+ * against its pinned pre-v2 type baseline.
+ */
+interface SeededAgentRegistry {
+  create(options: {
+    readonly sessionId: SessionId
+    readonly seed: readonly SessionEvent[]
+    readonly inheritedEventCount: number
+    readonly meta: object
+    readonly agentOptions: AgentOptions
+    readonly setup: (agentCtx: Context) => Promise<void>
+  }): Promise<AgentHandle>
+}
+
 const DENIAL = 'Nested follow-up branches are read-only: this tool would change state outside the branch. '
   + 'Answer from the conversation and any files you have read instead.'
 
@@ -159,9 +178,11 @@ export function createReadOnlyForkAgentRc7(
   input: ReadOnlyForkInput,
 ): Promise<AgentHandle> {
   const presetId = resolveSourcePresetRc7(input.sourceHeader, input.seed)
-  return agents.create({
+  return (agents as unknown as SeededAgentRegistry).create({
     sessionId: input.sessionId,
     seed: input.seed,
+    // The seed is exactly the inherited prefix; its length is the durable cut.
+    inheritedEventCount: input.seed.length,
     meta: hiddenBranchMetaRc7(input.sourceHeader, input.seed.length, presetId),
     agentOptions: resolveBranchAgentOptionsRc7(input.seed, input.fallbackAgentOptions),
     setup: createReadOnlyBranchSetup(ctx, presetId),

@@ -23,6 +23,7 @@ import {
   submitBranchTurnRc7,
 } from './adapter/read-only.ts'
 import { probeNativeContinuationCapability } from './adapter/native-continuation.ts'
+import { liveSeedLength, liveSessionEvents, readColdSessionLog } from './adapter/session-log.ts'
 import { probeBranchVisibilityRc7 } from './adapter/visibility.ts'
 import type { NestedFollowupsMetadataService } from './metadata-service.ts'
 import { resolveBranchBoundary } from './safe-boundary.ts'
@@ -40,6 +41,8 @@ declare module '@deepseek-ai/cordis' {
 interface SessionSnapshot {
   readonly header: SessionHeader
   readonly events: readonly SessionEvent[]
+  /** Durable fork cut, or `undefined` when the session is not seeded. */
+  readonly seedLength: number | undefined
 }
 
 type BranchReservation =
@@ -334,7 +337,7 @@ export class NestedFollowupsBranchService extends Service {
     }
 
     const snapshot = await this.readSession(branch.sessionId)
-    this.assertBranchHeader(branch, snapshot.header)
+    this.assertBranchHeader(branch, snapshot.header, snapshot.seedLength)
     const duplicate = userMessageById(snapshot.events, request.clientRequestId)
     if (duplicate !== undefined) {
       if (messageText(duplicate.data.content) !== request.question) {
@@ -383,11 +386,11 @@ export class NestedFollowupsBranchService extends Service {
       })
       this.rememberHandle(handle)
     } else {
-      this.assertBranchHeader(branch, liveAgent.session.header)
+      this.assertBranchHeader(branch, liveAgent.session.header, liveSeedLength(liveAgent.session))
       handle = this.requireOwnedHandle(liveAgent)
     }
     const agent = handle.agent
-    this.assertBranchHeader(branch, agent.session.header)
+    this.assertBranchHeader(branch, agent.session.header, liveSeedLength(agent.session))
     if (agent.status !== 'idle') {
       throw new BranchCommandError('branch-busy', 'wait for the current branch turn to finish before continuing')
     }
@@ -418,10 +421,11 @@ export class NestedFollowupsBranchService extends Service {
 
   private async readSession(sessionId: string): Promise<SessionSnapshot> {
     const live = this.ctx.sessions.get(SessionId(sessionId))
-    if (live !== undefined) return { header: live.header, events: live.events }
+    if (live !== undefined) {
+      return { header: live.header, events: liveSessionEvents(live), seedLength: liveSeedLength(live) }
+    }
     try {
-      const stored = await this.ctx.sessionPersistence.inspect(SessionId(sessionId))
-      return { header: stored.meta, events: stored.events }
+      return await readColdSessionLog(this.ctx.sessionPersistence, SessionId(sessionId))
     } catch (error: unknown) {
       throw new BranchCommandError(
         'session-not-found',
@@ -494,7 +498,7 @@ export class NestedFollowupsBranchService extends Service {
     }
 
     if (snapshot !== undefined) {
-      this.assertBranchHeader(branch, snapshot.header)
+      this.assertBranchHeader(branch, snapshot.header, snapshot.seedLength)
       const duplicate = userMessageById(snapshot.events, branch.clientRequestId)
       if (duplicate !== undefined) {
         if (messageText(duplicate.data.content) !== prompt) {
@@ -543,7 +547,7 @@ export class NestedFollowupsBranchService extends Service {
       handle = this.requireOwnedHandle(liveAgent)
     }
     const agent = handle.agent
-    this.assertBranchHeader(branch, agent.session.header)
+    this.assertBranchHeader(branch, agent.session.header, liveSeedLength(agent.session))
     if (agent.status !== 'idle') {
       throw new BranchCommandError('branch-busy', 'wait for the current branch turn to finish before retrying')
     }
@@ -572,11 +576,15 @@ export class NestedFollowupsBranchService extends Service {
     }
   }
 
-  private assertBranchHeader(branch: BranchRecord, header: SessionHeader): void {
+  private assertBranchHeader(
+    branch: BranchRecord,
+    header: SessionHeader,
+    seedLength: number | undefined,
+  ): void {
     if (String(header.id) !== branch.sessionId
       || header.origin !== 'subagent'
       || String(header.parentSession) !== branch.parentSessionId
-      || header.seedLength !== branch.seedLength) {
+      || seedLength !== branch.seedLength) {
       throw new BranchCommandError(
         'tree-mismatch',
         `session '${branch.sessionId}' no longer matches its immutable branch lineage`,
@@ -699,7 +707,7 @@ export class NestedFollowupsBranchService extends Service {
       if (current === undefined || current.status === 'deleted' || current.deletedAt !== undefined) return
       await this.metadata.repository.putBranch({
         ...current,
-        status: settledStatus(agent.session.events),
+        status: settledStatus(liveSessionEvents(agent.session)),
       })
       this.notify(rootSessionId)
     } catch (error: unknown) {

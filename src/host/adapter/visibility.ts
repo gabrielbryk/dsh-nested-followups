@@ -13,7 +13,12 @@ export interface BranchVisibilityCapability {
 export interface HiddenBranchMeta {
   readonly cwd?: string
   readonly parentSession: SessionId
-  readonly seedLength: number
+  /**
+   * Fork-lineage marker. Session format v2 moved the exact inherited prefix
+   * length off the header, so the numeric cut travels beside this flag as the
+   * `inheritedEventCount` creation option rather than inside the metadata.
+   */
+  readonly isSeeded: boolean
   readonly origin: typeof HIDDEN_BRANCH_ORIGIN
   /** Preset the source ran under; recorded so a resumed branch rebuilds it. */
   readonly agentPreset?: string
@@ -21,7 +26,13 @@ export interface HiddenBranchMeta {
 
 const cached = new WeakMap<Context, BranchVisibilityCapability>()
 
-/** Build the immutable rc.7 header fields that keep a branch out of workspace lists. */
+/**
+ * Build the immutable header fields that keep a branch out of workspace lists.
+ *
+ * The caller must pass the same `seedLength` as the session's
+ * `inheritedEventCount` creation option: the header only records THAT the
+ * session is seeded, and the exact cut is validated against the supplied seed.
+ */
 export function hiddenBranchMetaRc7(
   sourceHeader: SessionHeader,
   seedLength: number,
@@ -30,7 +41,7 @@ export function hiddenBranchMetaRc7(
   return {
     ...(sourceHeader.cwd === undefined ? {} : { cwd: sourceHeader.cwd }),
     parentSession: sourceHeader.id,
-    seedLength,
+    isSeeded: seedLength > 0,
     origin: HIDDEN_BRANCH_ORIGIN,
     ...(agentPreset === undefined ? {} : { agentPreset }),
   }

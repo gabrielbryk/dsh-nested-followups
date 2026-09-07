@@ -228,10 +228,12 @@ describe('rc.7 read-only branch adapter', () => {
     expect(createOptions?.meta).toMatchObject({
       cwd: 'D:\\workspace\\project',
       parentSession: SessionId('root'),
-      seedLength: 0,
+      isSeeded: false,
       origin: 'subagent',
       agentPreset: 'engineering',
     })
+    // Session format v2 carries the exact cut beside the metadata.
+    expect((createOptions as { inheritedEventCount?: number } | undefined)?.inheritedEventCount).toBe(0)
     expect(createOptions?.agentOptions).toEqual(fallbackAgentOptions)
     expect(resumeOptions?.agentOptions).toEqual(fallbackAgentOptions)
     expect(typeof createOptions?.setup).toBe('function')

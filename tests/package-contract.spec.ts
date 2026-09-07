@@ -31,7 +31,7 @@ describe('package contract', () => {
     })
   })
 
-  it('declares the verified rc.7 through rc.2 DSH compatibility window', async () => {
+  it('declares the session-format-v2 DSH compatibility window', async () => {
     const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
       peerDependencies?: Record<string, string>
       devDependencies?: Record<string, string>
@@ -43,8 +43,11 @@ describe('package contract', () => {
       .filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))
       .map(([, version]) => version)
 
+    // The handle-based persistence seam and session format v2 landed in
+    // 0.1.3-alpha.1, which is not published to the registry; the suite still
+    // builds against the last published line and shims the v2 contract.
     expect(new Set(dshPeers)).toEqual(new Set([
-      '>=0.1.0-rc.7 <0.1.1 || >=0.1.1-rc.1 <0.2.0',
+      '>=0.1.3-alpha.1 <0.2.0',
     ]))
     expect(new Set(dshValidationTargets)).toEqual(new Set(['0.1.1-rc.2']))
   })
