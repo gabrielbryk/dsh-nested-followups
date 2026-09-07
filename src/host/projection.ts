@@ -1,4 +1,4 @@
-import { BlockAssembler, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 
 import type {
@@ -51,11 +51,31 @@ function findSucceededWriteCall(
   return undefined
 }
 
+/**
+ * The in-progress assistant text of one live attempt.
+ *
+ * Session format v2 does not persist it, so it never appears in `events` and
+ * is supplied separately by the Host from the transient
+ * `agent/assistant-stream` publication (`adapter/assistant-stream.ts`).
+ */
+export interface LiveAssistantStream {
+  readonly turn: number
+  readonly step: number
+  /** The session's last durable seq when the attempt opened. */
+  readonly seq: number
+  readonly time: number
+  /** Frames folded so far; `0` means the model has produced nothing yet. */
+  readonly chunks: number
+  readonly text: string
+}
+
 export interface SessionLogSnapshot {
   sessionId: string
   events: readonly SessionEvent[]
   /** Durable header value. Used to detect stale branch metadata. */
   seedLength?: number
+  /** Transient in-progress assistant text; absent when nothing is streaming. */
+  liveStream?: LiveAssistantStream
 }
 
 interface VisibleMessage {
@@ -79,7 +99,8 @@ function eventOrder(left: SessionEvent, right: SessionEvent): number {
   return left.seq - right.seq
 }
 
-function sourceText(content: readonly ContentBlock[]): string {
+/** The renderable text of one message or assembled live prefix. */
+export function sourceText(content: readonly ContentBlock[]): string {
   return content
     .filter((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')
     .map(block => block.text)
@@ -119,7 +140,11 @@ function turnState(
   return kind === 'completed' || kind === 'max-tokens' ? 'complete' : 'error'
 }
 
-function visibleMessages(events: readonly SessionEvent[], minimumSeq: number): VisibleMessage[] {
+function visibleMessages(
+  events: readonly SessionEvent[],
+  minimumSeq: number,
+  live: LiveAssistantStream | undefined,
+): VisibleMessage[] {
   const ordered = [...events].sort(eventOrder)
   const endings = new Map<number, SessionEvent<'turn/end'>>()
   const turnAtUserEvent = new Map<number, number>()
@@ -130,7 +155,7 @@ function visibleMessages(events: readonly SessionEvent[], minimumSeq: number): V
     seq: number
     time: number
     chunks: number
-    assembler: BlockAssembler
+    text: string
   }>()
   let currentTurn: number | undefined
 
@@ -153,28 +178,26 @@ function visibleMessages(events: readonly SessionEvent[], minimumSeq: number): V
         seq: event.seq,
         time: event.time,
         chunks: 0,
-        assembler: new BlockAssembler(),
+        text: '',
       })
     }
-    if (event.type === 'assistant/chunk') {
-      const key = `${event.data.turn}:${event.data.step}`
-      const current = streamingSteps.get(key) ?? {
-        turn: event.data.turn,
-        step: event.data.step,
-        seq: event.seq,
-        time: event.time,
-        chunks: 0,
-        assembler: new BlockAssembler(),
-      }
-      try {
-        current.assembler.push(event.data.chunk)
-      } catch {
-        // A corrupted or future chunk kind must not make the entire tree
-        // unreadable. The durable assistant/message remains authoritative.
-      }
-      current.chunks += 1
-      streamingSteps.set(key, current)
-    }
+  }
+
+  // The live attempt is not in the log at all, so it is merged after the
+  // durable pass. `step/start` normally opened the entry already, in which
+  // case its durable position and timestamp are kept and only the streamed
+  // text is filled in.
+  if (live !== undefined) {
+    const key = `${live.turn}:${live.step}`
+    const opened = streamingSteps.get(key)
+    streamingSteps.set(key, {
+      turn: live.turn,
+      step: live.step,
+      seq: opened?.seq ?? live.seq,
+      time: opened?.time ?? live.time,
+      chunks: live.chunks,
+      text: live.text,
+    })
   }
 
   const finalSurfaceByTurn = new Map<number, SessionEvent>()
@@ -239,20 +262,13 @@ function visibleMessages(events: readonly SessionEvent[], minimumSeq: number): V
   }
   for (const [key, partial] of streamingSteps) {
     if (completedSteps.has(key) || partial.seq < minimumSeq) continue
-    let text = ''
-    try {
-      text = sourceText(partial.assembler.blocks())
-    } catch {
-      // A malformed or future block kind remains an empty live placeholder;
-      // the durable final assistant/message is still authoritative.
-    }
     messages.push({
       role: 'assistant',
       messageId: `stream-${partial.turn}-${partial.step}`,
       turn: partial.turn,
       seq: partial.seq,
       time: partial.time,
-      text,
+      text: partial.text,
       state: endings.has(partial.turn)
         ? 'error'
         : partial.chunks === 0
@@ -271,7 +287,7 @@ function nodesForSession(
   log: SessionLogSnapshot,
   minimumSeq: number,
 ): MessageNodeView[] {
-  const messages = visibleMessages(log.events, minimumSeq)
+  const messages = visibleMessages(log.events, minimumSeq, log.liveStream)
   const localTurns = new Map<number, number>()
   let nextLocalTurn = 1
   for (const message of messages) {

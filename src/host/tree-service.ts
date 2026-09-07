@@ -26,9 +26,16 @@ import {
   liveSessionEvents,
   readStoredSessionFrom,
 } from './adapter/session-log.ts'
+import {
+  subscribeAgentDisposed,
+  subscribeAssistantStream,
+  type AssistantStreamFrame,
+} from './adapter/assistant-stream.ts'
+import { LiveAssistantStreams } from './live-assistant-stream.ts'
 import { isDirectlyDeleted, projectConversationTree, type SessionLogSnapshot } from './projection.ts'
 
 const WATCH_TIMEOUT_MS = 15_000
+const STREAM_TOUCH_INTERVAL_MS = 50
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -98,6 +105,7 @@ export class NestedFollowupsService extends TypertRemoteService {
   private readonly revisions = new Map<string, number>()
   private readonly waiters = new Map<string, Set<RevisionWaiter>>()
   private readonly pendingStreamTouches = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly streams = new LiveAssistantStreams()
   private disposed = false
 
   constructor(ctx: Context) {
@@ -105,6 +113,15 @@ export class NestedFollowupsService extends TypertRemoteService {
     ctx.on('session/event', (session) => {
       this.onSessionEvent(String(session.id))
     }, { global: true })
+    // Session format v2 does not persist assistant chunks, so in-progress text
+    // arrives only on this transient publication (`adapter/assistant-stream.ts`).
+    subscribeAssistantStream(ctx, (sessionId, frame, seq) => {
+      this.onAssistantStreamFrame(sessionId, frame, seq)
+    })
+    subscribeAgentDisposed(ctx, (sessionId) => {
+      this.streams.clear(sessionId)
+      this.onSessionEvent(sessionId)
+    })
     ctx.on('nested-followups/change', (rootSessionId) => {
       this.touchRoot(rootSessionId)
     })
@@ -116,6 +133,7 @@ export class NestedFollowupsService extends TypertRemoteService {
       this.waiters.clear()
       for (const timer of this.pendingStreamTouches.values()) clearTimeout(timer)
       this.pendingStreamTouches.clear()
+      this.streams.clearAll()
     }, 'nested-followups.tree-watch')
   }
 
@@ -135,6 +153,28 @@ export class NestedFollowupsService extends TypertRemoteService {
     const rootSessionId = this.rootSessionIdFor(sessionId)
     this.cancelStreamTouch(rootSessionId)
     this.touchRoot(rootSessionId)
+  }
+
+  /**
+   * Publish live assistant text without one revision per model chunk.
+   *
+   * Attempt boundaries are rare and change what is rendered structurally, so
+   * they notify immediately; chunk frames coalesce into one bounded revision.
+   */
+  private onAssistantStreamFrame(sessionId: string, frame: AssistantStreamFrame, seq: number): void {
+    if (!this.streams.accept(sessionId, frame, seq)) return
+    const rootSessionId = this.rootSessionIdFor(sessionId)
+    if (frame.type !== 'chunk') {
+      this.cancelStreamTouch(rootSessionId)
+      this.touchRoot(rootSessionId)
+      return
+    }
+    if (this.pendingStreamTouches.has(rootSessionId)) return
+    const timer = setTimeout(() => {
+      this.pendingStreamTouches.delete(rootSessionId)
+      if (!this.disposed) this.touchRoot(rootSessionId)
+    }, STREAM_TOUCH_INTERVAL_MS)
+    this.pendingStreamTouches.set(rootSessionId, timer)
   }
 
   private cancelStreamTouch(rootSessionId: string): void {
@@ -288,10 +328,12 @@ export class NestedFollowupsService extends TypertRemoteService {
       // in the branch session: seq and log offset are the same number on a
       // contiguous log, so it is passed through unconverted.
       const seedLength = liveSeedLength(live)
+      const liveStream = this.streams.get(sessionId)
       return {
         sessionId,
         events: liveSessionEvents(live, fromSeq),
         ...(seedLength === undefined ? {} : { seedLength }),
+        ...(liveStream === undefined ? {} : { liveStream }),
       }
     }
     if (!persistedHeaders.has(sessionId)) return undefined

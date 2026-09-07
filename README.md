@@ -183,9 +183,13 @@ every session-log surface this plugin used:
   (`header.seedLength`) onto a separate `inheritedEventCount` paired with the
   boolean `header.isSeeded`.
 
-The log surfaces are funnelled through `src/host/adapter/session-log.ts`.
-Earlier DeepSeek Harness lines do not expose those surfaces, so this release
-cannot run on them.
+- `f99b06e` also removed `assistant/chunk` from `SessionEventMap`, moving live
+  assistant text onto the transient `agent/assistant-stream` Context event.
+
+The log surfaces are funnelled through `src/host/adapter/session-log.ts` and
+the live stream through `src/host/adapter/assistant-stream.ts`. Earlier
+DeepSeek Harness lines do not expose those surfaces, so this release cannot
+run on them.
 
 `0.1.3-alpha.1` is not published to the npm registry, so the package still
 builds and tests against the last published line (`0.1.1-rc.2`) and adapts it
@@ -193,6 +197,18 @@ to the v2 contract in `tests/fixtures/session-format-v2.ts`. A green build here
 therefore proves internal consistency, not harness compatibility; the deploying
 setup repository pins the exact reviewed harness commit and refuses to ship a
 mismatch.
+
+**Streaming previews come from the live agent, not the session log.** Session
+format v2 stopped logging `assistant/chunk`: an attempt's chunks are published
+process-locally as `agent/assistant-stream` frames and embedded, already
+compacted, in the one durable event that settles the attempt. Those frames are
+not session events — they carry no `seq` and are never persisted — so the Tree
+View subscribes to them directly, at the same Host seam upstream's own session
+controller uses, and folds them with `BlockAssembler` into the same live node
+the removed chunk branch fed. The live text is dropped when the attempt's
+durable `assistant/message` lands, when the agent is disposed, and on Host
+disposal. A branch whose agent is not attached in this process shows no
+preview, which is also true of the built-in chat view.
 
 **Branches cannot be continued from the standard chat view.** DSH currently
 rejects user messages sent from the normal chat UI to a subagent-origin

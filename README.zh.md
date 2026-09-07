@@ -155,12 +155,23 @@ Session 日志接口：`bec6805` 用按会话句柄（`open`/`read`/`close`）�
 格式 v2）用 `snapshotEvents()` 取代了 `Session.events` 访问器，并把持久化的
 fork 切点从 Header（`header.seedLength`）移到与布尔 `header.isSeeded` 配对的
 独立 `inheritedEventCount`。这些调用全部收敛在
-`src/host/adapter/session-log.ts`。更早的 DeepSeek Harness 不提供这些接口。
+`src/host/adapter/session-log.ts`；`f99b06e` 同时把 `assistant/chunk` 从
+`SessionEventMap` 中移除，实时助手文本改由瞬时的 `agent/assistant-stream` 事件
+承载，收敛在 `src/host/adapter/assistant-stream.ts`。更早的 DeepSeek Harness
+不提供这些接口。
 
 `0.1.3-alpha.1` 未发布到 npm，因此本包仍基于最后一个已发布版本
 （`0.1.1-rc.2`）构建与测试，并在 `tests/fixtures/session-format-v2.ts` 中把它
 适配到 v2 契约。构建通过只能说明内部一致，不能说明宿主兼容；部署用的 setup
 仓库会固定已审阅的 Harness 提交并拒绝不匹配的部署。
+
+**流式预览来自实时 Agent，而不是 Session 日志。** Session 格式 v2 不再记录
+`assistant/chunk`：一次尝试的分片以进程内的 `agent/assistant-stream` 帧发布，
+并以压缩形式内嵌进结算该尝试的那一条持久事件。这些帧不是 Session 事件——没有
+`seq`，也不会落盘——因此 Tree View 直接订阅它们（与上游 Session Controller 相同
+的宿主接缝），用 `BlockAssembler` 折叠进原先由 chunk 分支供给的同一个实时节点。
+当该尝试的 `assistant/message` 落盘、Agent 被销毁或宿主卸载时，实时文本即被丢弃。
+若某个分支的 Agent 未在本进程内附着，则不显示预览——内置 Chat 视图同样如此。
 
 **分支目前不能在原生 Chat 里续聊。** DSH 会拒绝从普通对话界面向 subagent-origin
 Session 发送用户消息，因此分支的阅读和续聊都在 Tree View 中完成。插件已经预留对

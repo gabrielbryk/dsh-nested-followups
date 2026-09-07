@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
+import { LiveAssistantStreams } from '../src/host/live-assistant-stream.ts'
 import {
   displayLabelOf,
   projectConversationTree,
   validateAnchorRange,
+  type LiveAssistantStream,
+  type SessionLogSnapshot,
 } from '../src/host/projection.ts'
 import type { BranchRecord, TreeRecord } from '../src/shared/types.ts'
 import { pluginContext, textTurn, toolTurn } from './fixtures/session-events.ts'
@@ -72,14 +75,18 @@ const nestedEvents = [
 
 function logs(entries?: {
   branchOneEvents?: typeof branchOneEvents
+  branchOneLiveStream?: LiveAssistantStream | undefined
   nestedEvents?: typeof nestedEvents
-}): Map<string, { sessionId: string; events: typeof rootEvents; seedLength?: number }> {
-  return new Map([
+}): Map<string, SessionLogSnapshot> {
+  return new Map<string, SessionLogSnapshot>([
     ['root', { sessionId: 'root', events: rootEvents }],
     ['branch-session-1', {
       sessionId: 'branch-session-1',
       events: entries?.branchOneEvents ?? branchOneEvents,
       seedLength: 12,
+      ...(entries?.branchOneLiveStream === undefined
+        ? {}
+        : { liveStream: entries.branchOneLiveStream }),
     }],
     ['branch-session-1-1', {
       sessionId: 'branch-session-1-1',
@@ -329,35 +336,49 @@ describe('conversation tree projection', () => {
       expect.objectContaining({ messageId: 'stream-3-1', state: 'queued', text: '' }),
     ])
 
-    const streamingEvents = [
-      ...queuedEvents,
-      sessionEvent({
-        type: 'assistant/chunk',
-        seq: 15,
+    // Session format v2 never logs the chunks, so the in-progress text is
+    // folded from the transient `agent/assistant-stream` publication and
+    // handed to the projection beside the durable log.
+    const live = new LiveAssistantStreams()
+    live.accept('branch-session-1', {
+      type: 'start',
+      attemptId: 'attempt-1',
+      revision: 1,
+      turn: 3,
+      step: 1,
+    }, 14)
+    for (const chunk of [
+      { type: 'block-start', index: 0, blockType: 'text' },
+      { type: 'text-delta', index: 0, text: 'Partial answer' },
+    ]) {
+      live.accept('branch-session-1', {
+        type: 'chunk',
+        attemptId: 'attempt-1',
+        revision: 1,
+        index: 0,
         time: 2_003,
-        data: { turn: 3, step: 1, chunk: { type: 'block-start', index: 0, blockType: 'text' } },
-      }),
-      sessionEvent({
-        type: 'assistant/chunk',
-        seq: 16,
-        time: 2_004,
-        data: { turn: 3, step: 1, chunk: { type: 'text-delta', index: 0, text: 'Partial answer' } },
-      }),
-    ]
-    const streamingLogs = logs({ branchOneEvents: streamingEvents as typeof branchOneEvents })
+        chunk,
+      }, 14)
+    }
+    const streamingLogs = logs({
+      branchOneEvents: queuedEvents as typeof branchOneEvents,
+      branchOneLiveStream: live.get('branch-session-1'),
+    })
     const streaming = projectConversationTree(tree, [branchOne], streamingLogs)
     const streamingAnswer = streaming.nodes.find(node => node.messageId === 'stream-3-1')
 
     expect(streamingAnswer).toEqual(expect.objectContaining({
       state: 'streaming',
       text: 'Partial answer',
+      seq: 14,
+      time: 2_002,
     }))
 
     const completeEvents = [
-      ...streamingEvents,
+      ...queuedEvents,
       sessionEvent({
         type: 'assistant/message',
-        seq: 17,
+        seq: 15,
         time: 2_005,
         data: {
           turn: 3,
@@ -373,21 +394,35 @@ describe('conversation tree projection', () => {
       }),
       sessionEvent({
         type: 'step/end',
-        seq: 18,
+        seq: 16,
         time: 2_006,
         data: { turn: 3, step: 1 },
       }),
       sessionEvent({
         type: 'turn/end',
-        seq: 19,
+        seq: 17,
         time: 2_007,
         data: { turn: 3, reason: { kind: 'completed' } },
       }),
     ]
-    const completeLogs = logs({ branchOneEvents: completeEvents as typeof branchOneEvents })
+    // The `end` frame lands after the durable settlement; even before it is
+    // observed, a live attempt whose step already committed is suppressed.
+    const completeLogs = logs({
+      branchOneEvents: completeEvents as typeof branchOneEvents,
+      branchOneLiveStream: live.get('branch-session-1'),
+    })
     const complete = projectConversationTree(tree, [branchOne], completeLogs)
 
     expect(complete.nodes.some(node => node.messageId === 'stream-3-1')).toBe(false)
+
+    live.accept('branch-session-1', {
+      type: 'end',
+      attemptId: 'attempt-1',
+      revision: 1,
+      index: 2,
+      outcome: { kind: 'committed', eventType: 'assistant/message', seq: 15 },
+    }, 15)
+    expect(live.get('branch-session-1')).toBeUndefined()
     expect(complete.nodes.find(node => node.messageId === 'branch-stream-a1')).toEqual(
       expect.objectContaining({ state: 'complete', text: 'Partial answer, completed.' }),
     )

@@ -32,6 +32,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`tests/fixtures/session-format-v2.ts`) so it exercises the ported seam while
   the package continues to build against the last published DeepSeek Harness
   line; `0.1.3-alpha.1` is not on the npm registry.
+- Restored in-progress assistant text in the Tree View on the new event model.
+  `f99b06e` also removed `assistant/chunk` from `SessionEventMap`, so the
+  projection's chunk-folding branch could never fire; live text now comes from
+  the transient, process-local `agent/assistant-stream` publication
+  (`packages/core/agent/src/runtime-types.ts:74` and `:315`), consumed at the
+  same Host seam upstream's own session controller uses
+  (`packages/api/session-controller/src/history.ts:54`). The new
+  `src/host/adapter/assistant-stream.ts` declares that payload structurally and
+  `src/host/live-assistant-stream.ts` folds one attempt per session with
+  `BlockAssembler` into the same `stream-<turn>-<step>` node the removed branch
+  fed, so the Tree View's node identity, `queued`/`streaming` states, and
+  coalesced revision cadence are unchanged. The live text is retired on the
+  attempt's `end` frame, on `agent/disposed`, and on Host disposal, and a live
+  step whose durable `assistant/message` already committed stays suppressed.
+  The frames are not session events — they carry no `seq` and are never
+  persisted — so a branch whose agent is not attached in this process shows no
+  preview. `assistant/attempt` was rejected as the source: it commits only for
+  an attempt that produced no surface message, and only at settlement.
 
 ### Added
 

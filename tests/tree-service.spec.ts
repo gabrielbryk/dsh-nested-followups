@@ -96,6 +96,7 @@ async function setup(options: { branches?: boolean; cold?: boolean; deletion?: b
   repository: TreeMetadataRepository
   persistence: MemoryPersistence
   deletionCalls: Array<{ request: { ownerSessionId: string; branchId: string }; counts: Map<string, number> }>
+  ctx: Context
 }> {
   const ctx = new Context()
   const fibers: Fiber[] = []
@@ -230,11 +231,35 @@ async function setup(options: { branches?: boolean; cold?: boolean; deletion?: b
       for (const fiber of fibers.reverse()) await fiber.dispose()
     },
     service: ctx.nestedFollowups,
+    ctx,
     root,
     repository,
     persistence: ctx.sessionPersistence as unknown as MemoryPersistence,
     deletionCalls,
   }
+}
+
+/**
+ * Publish one process-local assistant frame the way `AgentLoop` does.
+ *
+ * `agent/assistant-stream` is not a Session event and does not exist in the
+ * pinned 0.1.1-rc.2 type surface, so it is emitted structurally here, exactly
+ * as the Host adapter consumes it.
+ */
+function emitAssistantStream(ctx: Context, session: { id: SessionId; seq: number }, frame: unknown): void {
+  ;(ctx as unknown as { emit(name: string, payload: unknown): void })
+    .emit('agent/assistant-stream', { agent: { session }, frame })
+}
+
+function liveNode(
+  nodes: readonly { messageId: string; text: string }[],
+): { messageId: string; text: string } | undefined {
+  return nodes.find(node => node.messageId === 'stream-2-1')
+}
+
+function emitAgentDisposed(ctx: Context, session: { id: SessionId }): void {
+  ;(ctx as unknown as { emit(name: string, payload: unknown): void })
+    .emit('agent/disposed', { agent: { session } })
 }
 
 describe('tree projection Remote service', () => {
@@ -337,6 +362,117 @@ describe('tree projection Remote service', () => {
       expect(changed.value.changed).toBe(true)
       if (!changed.value.changed) return
       expect(changed.value.snapshot.revision).toBe(initial.value.revision + 1)
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('renders in-progress assistant text from the transient stream publication', async () => {
+    const { ctx, dispose, service, root } = await setup()
+    try {
+      root.append('turn/start', { turn: 2 })
+      root.append('step/start', { turn: 2, step: 1 })
+      const queued = await service.readTree({ sessionId: 'root' })
+      if (!queued.ok) throw new Error('root projection missing')
+      expect(liveNode(queued.value.projection.nodes)).toEqual(expect.objectContaining({
+        messageId: 'stream-2-1',
+        state: 'queued',
+        text: '',
+      }))
+
+      emitAssistantStream(ctx, root, {
+        type: 'start', attemptId: 'attempt-1', revision: 1, turn: 2, step: 1,
+      })
+      for (const text of ['one', ' two', ' three']) {
+        emitAssistantStream(ctx, root, {
+          type: 'chunk',
+          attemptId: 'attempt-1',
+          revision: 1,
+          index: 0,
+          time: 5_000,
+          chunk: { type: 'text-delta', index: 0, text },
+        })
+      }
+
+      const streaming = await service.readTree({ sessionId: 'root' })
+      expect(streaming.ok && liveNode(streaming.value.projection.nodes)).toEqual(
+        expect.objectContaining({
+          messageId: 'stream-2-1',
+          state: 'streaming',
+          text: 'one two three',
+        }),
+      )
+
+      emitAssistantStream(ctx, root, {
+        type: 'end',
+        attemptId: 'attempt-1',
+        revision: 1,
+        index: 3,
+        outcome: { kind: 'abandoned' },
+      })
+      const ended = await service.readTree({ sessionId: 'root' })
+      expect(ended.ok && liveNode(ended.value.projection.nodes)).toEqual(
+        expect.objectContaining({ messageId: 'stream-2-1', text: '' }),
+      )
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('coalesces high-frequency assistant chunks into one bounded revision', async () => {
+    const { ctx, dispose, service, root } = await setup()
+    try {
+      emitAssistantStream(ctx, root, {
+        type: 'start', attemptId: 'attempt-1', revision: 1, turn: 2, step: 1,
+      })
+      const initial = await service.readTree({ sessionId: 'root' })
+      if (!initial.ok) throw new Error('root projection missing')
+
+      for (const text of ['one', ' two', ' three']) {
+        emitAssistantStream(ctx, root, {
+          type: 'chunk',
+          attemptId: 'attempt-1',
+          revision: 1,
+          index: 0,
+          time: 5_000,
+          chunk: { type: 'text-delta', index: 0, text },
+        })
+      }
+      const immediate = await service.readTree({ sessionId: 'root' })
+      expect(immediate.ok && immediate.value.revision).toBe(initial.value.revision)
+
+      await new Promise(resolve => setTimeout(resolve, 75))
+      const coalesced = await service.readTree({ sessionId: 'root' })
+      expect(coalesced.ok && coalesced.value.revision).toBe(initial.value.revision + 1)
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('retires a live stream when its agent is disposed', async () => {
+    const { ctx, dispose, service, root } = await setup()
+    try {
+      root.append('turn/start', { turn: 2 })
+      root.append('step/start', { turn: 2, step: 1 })
+      emitAssistantStream(ctx, root, {
+        type: 'start', attemptId: 'attempt-1', revision: 1, turn: 2, step: 1,
+      })
+      emitAssistantStream(ctx, root, {
+        type: 'chunk',
+        attemptId: 'attempt-1',
+        revision: 1,
+        index: 0,
+        time: 5_000,
+        chunk: { type: 'text-delta', index: 0, text: 'half a sentence' },
+      })
+      const streaming = await service.readTree({ sessionId: 'root' })
+      expect(streaming.ok && liveNode(streaming.value.projection.nodes)?.text).toBe('half a sentence')
+
+      emitAgentDisposed(ctx, root)
+      const retired = await service.readTree({ sessionId: 'root' })
+      expect(retired.ok && liveNode(retired.value.projection.nodes)).toEqual(
+        expect.objectContaining({ messageId: 'stream-2-1', text: '' }),
+      )
     } finally {
       await dispose()
     }
