@@ -65,6 +65,21 @@ function inheritedEdges(
   return Object.freeze(edgeIds)
 }
 
+function rootSessionTailGroup(
+  graph: ProjectionGraphIndex,
+  inheritedRootSegment: readonly MessageNodeView[],
+): ContextExclusionGroup | undefined {
+  const rootNodes = graph.nodesBySessionId.get(graph.projection.tree.rootSessionId) ?? []
+  const nodeIds = rootNodes
+    .slice(inheritedRootSegment.length)
+    .map(node => node.nodeId)
+  if (nodeIds.length === 0) return undefined
+  return Object.freeze({
+    reason: 'root-session-tail' as const,
+    nodeIds: Object.freeze(nodeIds),
+  })
+}
+
 /**
  * Derive the exact ancestor-only request prefix represented by a tree node.
  *
@@ -108,10 +123,11 @@ export function deriveContextPreview(
   }
 
   const inheritedNodes = segments.flat()
+  const rootTail = rootSessionTailGroup(graph, segments[0] ?? [])
   return Object.freeze({
     targetNodeId,
     inheritedNodeIds: Object.freeze(inheritedNodes.map(node => node.nodeId)),
     inheritedEdgeIds: inheritedEdges(graph, inheritedNodes),
-    excludedGroups: Object.freeze([]),
+    excludedGroups: Object.freeze(rootTail === undefined ? [] : [rootTail]),
   })
 }

@@ -17,7 +17,10 @@ describe('context preview', () => {
       'sequence:root-a1:root-q2',
       'sequence:root-q2:root-a2',
     ])
-    expect(preview?.excludedGroups).toEqual([])
+    expect(preview?.excludedGroups).toEqual([{
+      reason: 'root-session-tail',
+      nodeIds: ['root-q3', 'root-a3'],
+    }])
   })
 
   it('keeps only the exact ancestor chain for a nested branch', () => {
@@ -45,6 +48,10 @@ describe('context preview', () => {
     expect(preview?.inheritedNodeIds).not.toContain('root-q3')
     expect(preview?.inheritedNodeIds).not.toContain('branch-1-q2')
     expect(preview?.inheritedNodeIds).not.toContain('branch-2-q')
+    expect(preview?.excludedGroups).toEqual([{
+      reason: 'root-session-tail',
+      nodeIds: ['root-q3', 'root-a3'],
+    }])
   })
 
   it('includes earlier turns when the target is later in the current branch', () => {
@@ -66,6 +73,12 @@ describe('context preview', () => {
     expect(Object.isFrozen(preview)).toBe(true)
     expect(Object.isFrozen(preview?.inheritedNodeIds)).toBe(true)
     expect(Object.isFrozen(preview?.inheritedEdgeIds)).toBe(true)
+  })
+
+  it('omits the root-tail group when the selected path reaches the root tip', () => {
+    const preview = deriveContextPreview(nestedContextPreviewProjectionFixture(), 'root-a3')
+
+    expect(preview?.excludedGroups).toEqual([])
   })
 
   it('does not invent a preview for an unknown node', () => {
