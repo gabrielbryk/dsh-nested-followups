@@ -48,10 +48,16 @@ describe('context preview', () => {
     expect(preview?.inheritedNodeIds).not.toContain('root-q3')
     expect(preview?.inheritedNodeIds).not.toContain('branch-1-q2')
     expect(preview?.inheritedNodeIds).not.toContain('branch-2-q')
-    expect(preview?.excludedGroups).toEqual([{
-      reason: 'root-session-tail',
-      nodeIds: ['root-q3', 'root-a3'],
-    }])
+    expect(preview?.excludedGroups).toEqual([
+      {
+        reason: 'root-session-tail',
+        nodeIds: ['root-q3', 'root-a3'],
+      },
+      {
+        reason: 'current-branch-tail',
+        nodeIds: ['branch-1-q2', 'branch-1-a2'],
+      },
+    ])
   })
 
   it('includes earlier turns when the target is later in the current branch', () => {
@@ -73,6 +79,28 @@ describe('context preview', () => {
     expect(Object.isFrozen(preview)).toBe(true)
     expect(Object.isFrozen(preview?.inheritedNodeIds)).toBe(true)
     expect(Object.isFrozen(preview?.inheritedEdgeIds)).toBe(true)
+    expect(preview?.excludedGroups).toEqual([{
+      reason: 'root-session-tail',
+      nodeIds: ['root-q3', 'root-a3'],
+    }])
+  })
+
+  it('classifies later turns in the selected branch as branch tail', () => {
+    const preview = deriveContextPreview(
+      nestedContextPreviewProjectionFixture(),
+      'branch-1-a',
+    )
+
+    expect(preview?.excludedGroups).toEqual([
+      {
+        reason: 'root-session-tail',
+        nodeIds: ['root-q3', 'root-a3'],
+      },
+      {
+        reason: 'current-branch-tail',
+        nodeIds: ['branch-1-q2', 'branch-1-a2'],
+      },
+    ])
   })
 
   it('omits the root-tail group when the selected path reaches the root tip', () => {

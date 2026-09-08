@@ -80,6 +80,24 @@ function rootSessionTailGroup(
   })
 }
 
+function branchSessionTailGroup(
+  graph: ProjectionGraphIndex,
+  inheritedBranchSegments: readonly (readonly MessageNodeView[])[],
+): ContextExclusionGroup | undefined {
+  const nodeIds = inheritedBranchSegments.flatMap((segment) => {
+    const sessionId = segment[0]?.sessionId
+    if (sessionId === undefined) return []
+    return (graph.nodesBySessionId.get(sessionId) ?? [])
+      .slice(segment.length)
+      .map(node => node.nodeId)
+  })
+  if (nodeIds.length === 0) return undefined
+  return Object.freeze({
+    reason: 'current-branch-tail' as const,
+    nodeIds: Object.freeze(nodeIds),
+  })
+}
+
 /**
  * Derive the exact ancestor-only request prefix represented by a tree node.
  *
@@ -124,10 +142,13 @@ export function deriveContextPreview(
 
   const inheritedNodes = segments.flat()
   const rootTail = rootSessionTailGroup(graph, segments[0] ?? [])
+  const branchTail = branchSessionTailGroup(graph, segments.slice(1))
   return Object.freeze({
     targetNodeId,
     inheritedNodeIds: Object.freeze(inheritedNodes.map(node => node.nodeId)),
     inheritedEdgeIds: inheritedEdges(graph, inheritedNodes),
-    excludedGroups: Object.freeze(rootTail === undefined ? [] : [rootTail]),
+    excludedGroups: Object.freeze([rootTail, branchTail].filter(
+      (group): group is ContextExclusionGroup => group !== undefined,
+    )),
   })
 }
