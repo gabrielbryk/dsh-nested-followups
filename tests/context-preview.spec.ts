@@ -57,6 +57,10 @@ describe('context preview', () => {
         reason: 'current-branch-tail',
         nodeIds: ['branch-1-q2', 'branch-1-a2'],
       },
+      {
+        reason: 'sibling-branch',
+        nodeIds: ['branch-2-q', 'branch-2-a'],
+      },
     ])
   })
 
@@ -79,10 +83,16 @@ describe('context preview', () => {
     expect(Object.isFrozen(preview)).toBe(true)
     expect(Object.isFrozen(preview?.inheritedNodeIds)).toBe(true)
     expect(Object.isFrozen(preview?.inheritedEdgeIds)).toBe(true)
-    expect(preview?.excludedGroups).toEqual([{
-      reason: 'root-session-tail',
-      nodeIds: ['root-q3', 'root-a3'],
-    }])
+    expect(preview?.excludedGroups).toEqual([
+      {
+        reason: 'root-session-tail',
+        nodeIds: ['root-q3', 'root-a3'],
+      },
+      {
+        reason: 'sibling-branch',
+        nodeIds: ['branch-2-q', 'branch-2-a'],
+      },
+    ])
   })
 
   it('classifies later turns in the selected branch as branch tail', () => {
@@ -100,7 +110,24 @@ describe('context preview', () => {
         reason: 'current-branch-tail',
         nodeIds: ['branch-1-q2', 'branch-1-a2'],
       },
+      {
+        reason: 'sibling-branch',
+        nodeIds: ['branch-2-q', 'branch-2-a'],
+      },
     ])
+  })
+
+  it('classifies every direct sibling branch outside the inherited path', () => {
+    const preview = deriveContextPreview(
+      nestedContextPreviewProjectionFixture(),
+      'nested-a',
+    )
+
+    expect(preview?.excludedGroups.find(group => group.reason === 'sibling-branch'))
+      .toEqual({
+        reason: 'sibling-branch',
+        nodeIds: ['branch-2-q', 'branch-2-a'],
+      })
   })
 
   it('omits the root-tail group when the selected path reaches the root tip', () => {

@@ -1,4 +1,7 @@
-import type { ConversationTreeProjection } from '../../shared/projection.ts'
+import type {
+  BranchProjectionView,
+  ConversationTreeProjection,
+} from '../../shared/projection.ts'
 import type { MessageNodeView } from '../../shared/types.ts'
 import {
   buildProjectionGraphIndex,
@@ -98,6 +101,35 @@ function branchSessionTailGroup(
   })
 }
 
+function siblingBranchGroup(
+  graph: ProjectionGraphIndex,
+  inheritedBranches: readonly BranchProjectionView[],
+): ContextExclusionGroup | undefined {
+  const inheritedBranchIds = new Set(
+    inheritedBranches.map(branch => branch.record.branchId),
+  )
+  const siblingBranchIds = new Set<string>()
+  const nodeIds = inheritedBranches.flatMap((branch) => (
+    graph.childBranchesByParentBranchId
+      .get(branch.record.parentBranchId)
+      ?.flatMap((candidate) => {
+        const candidateBranchId = candidate.record.branchId
+        if (
+          inheritedBranchIds.has(candidateBranchId)
+          || siblingBranchIds.has(candidateBranchId)
+        ) return []
+        siblingBranchIds.add(candidateBranchId)
+        return (graph.nodesBySessionId.get(candidate.record.sessionId) ?? [])
+          .map(node => node.nodeId)
+      }) ?? []
+  ))
+  if (nodeIds.length === 0) return undefined
+  return Object.freeze({
+    reason: 'sibling-branch' as const,
+    nodeIds: Object.freeze(nodeIds),
+  })
+}
+
 /**
  * Derive the exact ancestor-only request prefix represented by a tree node.
  *
@@ -115,6 +147,7 @@ export function deriveContextPreview(
   if (cursor === undefined) return undefined
 
   const segments: (readonly MessageNodeView[])[] = []
+  const inheritedBranches: BranchProjectionView[] = []
   const visitedBranchIds = new Set<string>()
   while (true) {
     const segment = sessionPrefixThrough(graph, cursor)
@@ -137,17 +170,19 @@ export function deriveContextPreview(
       || anchor === undefined
       || anchor.sessionId !== branch.record.parentSessionId
     ) return undefined
+    inheritedBranches.unshift(branch)
     cursor = anchor
   }
 
   const inheritedNodes = segments.flat()
   const rootTail = rootSessionTailGroup(graph, segments[0] ?? [])
   const branchTail = branchSessionTailGroup(graph, segments.slice(1))
+  const siblingBranches = siblingBranchGroup(graph, inheritedBranches)
   return Object.freeze({
     targetNodeId,
     inheritedNodeIds: Object.freeze(inheritedNodes.map(node => node.nodeId)),
     inheritedEdgeIds: inheritedEdges(graph, inheritedNodes),
-    excludedGroups: Object.freeze([rootTail, branchTail].filter(
+    excludedGroups: Object.freeze([rootTail, branchTail, siblingBranches].filter(
       (group): group is ContextExclusionGroup => group !== undefined,
     )),
   })
