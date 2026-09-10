@@ -17,10 +17,25 @@ describe('context preview', () => {
       'sequence:root-a1:root-q2',
       'sequence:root-q2:root-a2',
     ])
-    expect(preview?.excludedGroups).toEqual([{
-      reason: 'root-session-tail',
-      nodeIds: ['root-q3', 'root-a3'],
-    }])
+    expect(preview?.excludedGroups).toEqual([
+      {
+        reason: 'root-session-tail',
+        nodeIds: ['root-q3', 'root-a3'],
+      },
+      {
+        reason: 'descendant-branch',
+        nodeIds: [
+          'branch-1-q',
+          'branch-1-a',
+          'branch-2-q',
+          'branch-2-a',
+          'nested-q',
+          'nested-a',
+          'branch-1-q2',
+          'branch-1-a2',
+        ],
+      },
+    ])
   })
 
   it('keeps only the exact ancestor chain for a nested branch', () => {
@@ -92,6 +107,10 @@ describe('context preview', () => {
         reason: 'sibling-branch',
         nodeIds: ['branch-2-q', 'branch-2-a'],
       },
+      {
+        reason: 'descendant-branch',
+        nodeIds: ['nested-q', 'nested-a'],
+      },
     ])
   })
 
@@ -114,6 +133,10 @@ describe('context preview', () => {
         reason: 'sibling-branch',
         nodeIds: ['branch-2-q', 'branch-2-a'],
       },
+      {
+        reason: 'descendant-branch',
+        nodeIds: ['nested-q', 'nested-a'],
+      },
     ])
   })
 
@@ -130,10 +153,35 @@ describe('context preview', () => {
       })
   })
 
+  it('classifies child branch messages outside the selected branch context', () => {
+    const preview = deriveContextPreview(
+      nestedContextPreviewProjectionFixture(),
+      'branch-1-a2',
+    )
+
+    expect(preview?.excludedGroups.find(group => group.reason === 'descendant-branch'))
+      .toEqual({
+        reason: 'descendant-branch',
+        nodeIds: ['nested-q', 'nested-a'],
+      })
+  })
+
   it('omits the root-tail group when the selected path reaches the root tip', () => {
     const preview = deriveContextPreview(nestedContextPreviewProjectionFixture(), 'root-a3')
 
-    expect(preview?.excludedGroups).toEqual([])
+    expect(preview?.excludedGroups).toEqual([{
+      reason: 'descendant-branch',
+      nodeIds: [
+        'branch-1-q',
+        'branch-1-a',
+        'branch-2-q',
+        'branch-2-a',
+        'nested-q',
+        'nested-a',
+        'branch-1-q2',
+        'branch-1-a2',
+      ],
+    }])
   })
 
   it('does not invent a preview for an unknown node', () => {

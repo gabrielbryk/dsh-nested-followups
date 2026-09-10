@@ -130,13 +130,32 @@ function siblingBranchGroup(
   })
 }
 
+function descendantBranchGroup(
+  graph: ProjectionGraphIndex,
+  inheritedNodes: readonly MessageNodeView[],
+  existingGroups: readonly (ContextExclusionGroup | undefined)[],
+): ContextExclusionGroup | undefined {
+  const classifiedNodeIds = new Set(inheritedNodes.map(node => node.nodeId))
+  for (const group of existingGroups) {
+    for (const nodeId of group?.nodeIds ?? []) classifiedNodeIds.add(nodeId)
+  }
+  const nodeIds = graph.projection.nodes
+    .filter(node => node.branchId !== null && !classifiedNodeIds.has(node.nodeId))
+    .map(node => node.nodeId)
+  if (nodeIds.length === 0) return undefined
+  return Object.freeze({
+    reason: 'descendant-branch' as const,
+    nodeIds: Object.freeze(nodeIds),
+  })
+}
+
 /**
  * Derive the exact ancestor-only request prefix represented by a tree node.
  *
  * Each branch contributes only its session-local prefix through the selected
- * node (or through the child branch's anchor). Parent-session tails and sibling
- * branches are therefore never pulled into the inherited path. Exclusion
- * groups and boundary eligibility are added by later derivation stages.
+ * node (or through the child branch's anchor). Parent-session tails, sibling
+ * branches, and descendant branches are therefore never pulled into the
+ * inherited path. Boundary eligibility is added by a later derivation stage.
  */
 export function deriveContextPreview(
   projection: ConversationTreeProjection,
@@ -178,12 +197,20 @@ export function deriveContextPreview(
   const rootTail = rootSessionTailGroup(graph, segments[0] ?? [])
   const branchTail = branchSessionTailGroup(graph, segments.slice(1))
   const siblingBranches = siblingBranchGroup(graph, inheritedBranches)
+  const descendantBranches = descendantBranchGroup(
+    graph,
+    inheritedNodes,
+    [rootTail, branchTail, siblingBranches],
+  )
   return Object.freeze({
     targetNodeId,
     inheritedNodeIds: Object.freeze(inheritedNodes.map(node => node.nodeId)),
     inheritedEdgeIds: inheritedEdges(graph, inheritedNodes),
-    excludedGroups: Object.freeze([rootTail, branchTail, siblingBranches].filter(
-      (group): group is ContextExclusionGroup => group !== undefined,
-    )),
+    excludedGroups: Object.freeze([
+      rootTail,
+      branchTail,
+      siblingBranches,
+      descendantBranches,
+    ].filter((group): group is ContextExclusionGroup => group !== undefined)),
   })
 }
