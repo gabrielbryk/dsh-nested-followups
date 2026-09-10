@@ -27,12 +27,12 @@ describe('context preview', () => {
         nodeIds: [
           'branch-1-q',
           'branch-1-a',
-          'branch-2-q',
-          'branch-2-a',
-          'nested-q',
-          'nested-a',
           'branch-1-q2',
           'branch-1-a2',
+          'nested-q',
+          'nested-a',
+          'branch-2-q',
+          'branch-2-a',
         ],
       },
     ])
@@ -166,6 +166,48 @@ describe('context preview', () => {
       })
   })
 
+  it('keeps exclusion groups stable when projection arrays are reordered', () => {
+    const fixture = nestedContextPreviewProjectionFixture()
+    const expected = deriveContextPreview(fixture, 'branch-1-a')
+    const reordered = deriveContextPreview({
+      ...fixture,
+      nodes: [...fixture.nodes].reverse(),
+      branches: [...fixture.branches].reverse(),
+    }, 'branch-1-a')
+
+    expect(reordered?.excludedGroups).toEqual(expected?.excludedGroups)
+  })
+
+  it('deduplicates exclusion candidates within and across reason groups', () => {
+    const fixture = nestedContextPreviewProjectionFixture()
+    const siblingNodes = fixture.nodes.filter(node => node.branchId === 'branch-2')
+    const preview = deriveContextPreview({
+      ...fixture,
+      nodes: [...fixture.nodes, ...siblingNodes],
+    }, 'branch-1-a')
+    const excludedNodeIds = preview?.excludedGroups.flatMap(group => group.nodeIds) ?? []
+
+    expect(excludedNodeIds).toEqual([...new Set(excludedNodeIds)])
+    expect(preview?.excludedGroups).toEqual([
+      {
+        reason: 'root-session-tail',
+        nodeIds: ['root-q3', 'root-a3'],
+      },
+      {
+        reason: 'current-branch-tail',
+        nodeIds: ['branch-1-q2', 'branch-1-a2'],
+      },
+      {
+        reason: 'sibling-branch',
+        nodeIds: ['branch-2-q', 'branch-2-a'],
+      },
+      {
+        reason: 'descendant-branch',
+        nodeIds: ['nested-q', 'nested-a'],
+      },
+    ])
+  })
+
   it('omits the root-tail group when the selected path reaches the root tip', () => {
     const preview = deriveContextPreview(nestedContextPreviewProjectionFixture(), 'root-a3')
 
@@ -174,12 +216,12 @@ describe('context preview', () => {
       nodeIds: [
         'branch-1-q',
         'branch-1-a',
-        'branch-2-q',
-        'branch-2-a',
-        'nested-q',
-        'nested-a',
         'branch-1-q2',
         'branch-1-a2',
+        'nested-q',
+        'nested-a',
+        'branch-2-q',
+        'branch-2-a',
       ],
     }])
   })

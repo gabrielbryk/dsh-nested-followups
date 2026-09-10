@@ -18,6 +18,13 @@ export type ContextExclusionReason =
   | 'sibling-branch'
   | 'descendant-branch'
 
+const exclusionReasonOrder: readonly ContextExclusionReason[] = Object.freeze([
+  'root-session-tail',
+  'current-branch-tail',
+  'sibling-branch',
+  'descendant-branch',
+])
+
 /** One display group of messages excluded for the same semantic reason. */
 export interface ContextExclusionGroup {
   readonly reason: ContextExclusionReason
@@ -132,21 +139,63 @@ function siblingBranchGroup(
 
 function descendantBranchGroup(
   graph: ProjectionGraphIndex,
-  inheritedNodes: readonly MessageNodeView[],
-  existingGroups: readonly (ContextExclusionGroup | undefined)[],
 ): ContextExclusionGroup | undefined {
-  const classifiedNodeIds = new Set(inheritedNodes.map(node => node.nodeId))
-  for (const group of existingGroups) {
-    for (const nodeId of group?.nodeIds ?? []) classifiedNodeIds.add(nodeId)
-  }
   const nodeIds = graph.projection.nodes
-    .filter(node => node.branchId !== null && !classifiedNodeIds.has(node.nodeId))
+    .filter(node => node.branchId !== null)
     .map(node => node.nodeId)
   if (nodeIds.length === 0) return undefined
   return Object.freeze({
     reason: 'descendant-branch' as const,
     nodeIds: Object.freeze(nodeIds),
   })
+}
+
+function compareBranchPaths(left: readonly number[], right: readonly number[]): number {
+  const sharedLength = Math.min(left.length, right.length)
+  for (let index = 0; index < sharedLength; index += 1) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0)
+    if (difference !== 0) return difference
+  }
+  return left.length - right.length
+}
+
+function compareExcludedNodes(left: MessageNodeView, right: MessageNodeView): number {
+  return compareBranchPaths(left.branchPath, right.branchPath)
+    || left.seq - right.seq
+    || left.sessionId.localeCompare(right.sessionId)
+    || left.nodeId.localeCompare(right.nodeId)
+}
+
+function stabilizeExclusionGroups(
+  graph: ProjectionGraphIndex,
+  inheritedNodes: readonly MessageNodeView[],
+  candidateGroups: readonly (ContextExclusionGroup | undefined)[],
+): readonly ContextExclusionGroup[] {
+  const candidatesByReason = new Map<ContextExclusionReason, string[]>()
+  for (const group of candidateGroups) {
+    if (group === undefined) continue
+    const nodeIds = candidatesByReason.get(group.reason) ?? []
+    nodeIds.push(...group.nodeIds)
+    candidatesByReason.set(group.reason, nodeIds)
+  }
+
+  const claimedNodeIds = new Set(inheritedNodes.map(node => node.nodeId))
+  const groups: ContextExclusionGroup[] = []
+  for (const reason of exclusionReasonOrder) {
+    const candidates = new Map<string, MessageNodeView>()
+    for (const nodeId of candidatesByReason.get(reason) ?? []) {
+      if (claimedNodeIds.has(nodeId)) continue
+      const node = graph.nodesById.get(nodeId)
+      if (node !== undefined) candidates.set(nodeId, node)
+    }
+    const nodeIds = [...candidates.values()]
+      .sort(compareExcludedNodes)
+      .map(node => node.nodeId)
+    if (nodeIds.length === 0) continue
+    for (const nodeId of nodeIds) claimedNodeIds.add(nodeId)
+    groups.push(Object.freeze({ reason, nodeIds: Object.freeze(nodeIds) }))
+  }
+  return Object.freeze(groups)
 }
 
 /**
@@ -197,20 +246,16 @@ export function deriveContextPreview(
   const rootTail = rootSessionTailGroup(graph, segments[0] ?? [])
   const branchTail = branchSessionTailGroup(graph, segments.slice(1))
   const siblingBranches = siblingBranchGroup(graph, inheritedBranches)
-  const descendantBranches = descendantBranchGroup(
-    graph,
-    inheritedNodes,
-    [rootTail, branchTail, siblingBranches],
-  )
+  const descendantBranches = descendantBranchGroup(graph)
   return Object.freeze({
     targetNodeId,
     inheritedNodeIds: Object.freeze(inheritedNodes.map(node => node.nodeId)),
     inheritedEdgeIds: inheritedEdges(graph, inheritedNodes),
-    excludedGroups: Object.freeze([
+    excludedGroups: stabilizeExclusionGroups(graph, inheritedNodes, [
       rootTail,
       branchTail,
       siblingBranches,
       descendantBranches,
-    ].filter((group): group is ContextExclusionGroup => group !== undefined)),
+    ]),
   })
 }
