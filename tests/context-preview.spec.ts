@@ -6,6 +6,11 @@ describe('context preview', () => {
   it('derives a root-session prefix through the selected node', () => {
     const preview = deriveContextPreview(nestedContextPreviewProjectionFixture(), 'root-a2')
 
+    expect(preview?.boundary).toEqual({
+      eligible: true,
+      boundaryNodeId: 'root-a2',
+      snappedToTurnTail: false,
+    })
     expect(preview?.inheritedNodeIds).toEqual([
       'root-q1',
       'root-a1',
@@ -96,6 +101,7 @@ describe('context preview', () => {
       'branch-1-a2',
     ])
     expect(Object.isFrozen(preview)).toBe(true)
+    expect(Object.isFrozen(preview?.boundary)).toBe(true)
     expect(Object.isFrozen(preview?.inheritedNodeIds)).toBe(true)
     expect(Object.isFrozen(preview?.inheritedEdgeIds)).toBe(true)
     expect(preview?.excludedGroups).toEqual([
@@ -224,6 +230,131 @@ describe('context preview', () => {
         'branch-2-a',
       ],
     }])
+  })
+
+  it('reports user messages as unsupported branch boundaries', () => {
+    const preview = deriveContextPreview(nestedContextPreviewProjectionFixture(), 'root-q2')
+
+    expect(preview?.boundary).toEqual({
+      eligible: false,
+      reason: 'user-message',
+    })
+  })
+
+  it('reports an assistant in an open turn without disabling older completed turns', () => {
+    const fixture = nestedContextPreviewProjectionFixture()
+    const projection = {
+      ...fixture,
+      nodes: fixture.nodes.map((node) => {
+        if (node.nodeId !== 'root-a3') return node
+        const {
+          branchTargetMessageId: _branchTargetMessageId,
+          branchTargetSeq: _branchTargetSeq,
+          ...openNode
+        } = node
+        return { ...openNode, state: 'streaming' as const }
+      }),
+    }
+
+    expect(deriveContextPreview(projection, 'root-a3')?.boundary).toEqual({
+      eligible: false,
+      reason: 'turn-open',
+    })
+    expect(deriveContextPreview(projection, 'root-a2')?.boundary).toEqual({
+      eligible: true,
+      boundaryNodeId: 'root-a2',
+      snappedToTurnTail: false,
+    })
+  })
+
+  it('reports a completed turn without a safe assistant tail', () => {
+    const fixture = nestedContextPreviewProjectionFixture()
+    const projection = {
+      ...fixture,
+      nodes: fixture.nodes.map((node) => {
+        if (node.nodeId !== 'root-a2') return node
+        const {
+          branchTargetMessageId: _branchTargetMessageId,
+          branchTargetSeq: _branchTargetSeq,
+          ...unavailableNode
+        } = node
+        return unavailableNode
+      }),
+    }
+
+    expect(deriveContextPreview(projection, 'root-a2')?.boundary).toEqual({
+      eligible: false,
+      reason: 'turn-tail-unavailable',
+    })
+  })
+
+  it('snaps an earlier same-turn assistant to the finalized assistant boundary', () => {
+    const fixture = nestedContextPreviewProjectionFixture()
+    const selected = fixture.nodes.find(node => node.nodeId === 'root-a2')!
+    const tail = {
+      ...selected,
+      nodeId: 'root-a2-tail',
+      messageId: 'root-a2-tail',
+      seq: 4,
+      text: 'final answer after tools',
+      summary: 'final answer after tools',
+      branchTargetMessageId: 'root-a2-tail',
+      branchTargetSeq: 4,
+    }
+    const projection = {
+      ...fixture,
+      nodes: fixture.nodes.map(node => node.nodeId === 'root-a2'
+        ? { ...node, branchTargetMessageId: tail.messageId, branchTargetSeq: tail.seq }
+        : node.sessionId === 'root' && node.seq >= tail.seq
+          ? { ...node, seq: node.seq + 1 }
+          : node).concat(tail),
+      edges: fixture.edges.flatMap((edge) => {
+        if (edge.edgeId !== 'sequence:root-a2:root-q3') return [edge]
+        return [
+          {
+            edgeId: 'sequence:root-a2:root-a2-tail',
+            sourceNodeId: 'root-a2',
+            targetNodeId: 'root-a2-tail',
+            kind: 'sequence' as const,
+          },
+          {
+            ...edge,
+            edgeId: 'sequence:root-a2-tail:root-q3',
+            sourceNodeId: 'root-a2-tail',
+          },
+        ]
+      }),
+    }
+    const preview = deriveContextPreview(projection, 'root-a2')
+
+    expect(preview?.boundary).toEqual({
+      eligible: true,
+      boundaryNodeId: 'root-a2-tail',
+      snappedToTurnTail: true,
+    })
+    expect(preview?.inheritedNodeIds).toEqual([
+      'root-q1',
+      'root-a1',
+      'root-q2',
+      'root-a2',
+      'root-a2-tail',
+    ])
+    expect(preview?.inheritedEdgeIds).toContain('sequence:root-a2:root-a2-tail')
+  })
+
+  it('rejects a stale or malformed projected boundary target', () => {
+    const fixture = nestedContextPreviewProjectionFixture()
+    const projection = {
+      ...fixture,
+      nodes: fixture.nodes.map(node => node.nodeId === 'root-a2'
+        ? { ...node, branchTargetMessageId: 'missing-tail', branchTargetSeq: 999 }
+        : node),
+    }
+
+    expect(deriveContextPreview(projection, 'root-a2')?.boundary).toEqual({
+      eligible: false,
+      reason: 'turn-tail-unavailable',
+    })
   })
 
   it('does not invent a preview for an unknown node', () => {

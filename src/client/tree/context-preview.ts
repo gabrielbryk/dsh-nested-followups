@@ -32,19 +32,84 @@ export interface ContextExclusionGroup {
   readonly nodeIds: readonly string[]
 }
 
+/** Why a visible message cannot identify a safe DSH branch boundary. */
+export type ContextBoundaryIneligibilityReason =
+  | 'user-message'
+  | 'turn-open'
+  | 'turn-tail-unavailable'
+
+/** The safe completed-turn boundary represented by a selected message. */
+export type ContextBoundaryEligibility =
+  | {
+    readonly eligible: true
+    /** The projected assistant node at the actual completed-turn boundary. */
+    readonly boundaryNodeId: string
+    readonly snappedToTurnTail: boolean
+  }
+  | {
+    readonly eligible: false
+    readonly reason: ContextBoundaryIneligibilityReason
+  }
+
 /**
  * The exact model context represented by one eligible message boundary.
  *
- * The inherited path is ordered from the root message to `targetNodeId`.
+ * The inherited path is ordered from the root message to the effective branch
+ * boundary. That is `targetNodeId` for a turn-tail assistant, or the finalized
+ * assistant tail when an earlier assistant message in the same turn is
+ * selected. Ineligible nodes retain their visible prefix so callers can
+ * explain why the preview action is unavailable.
  * Excluded messages never appear in the inherited path or in another
- * exclusion group. Eligibility and aggregate counts are layered on by their
- * dedicated derivation steps.
+ * exclusion group. Aggregate counts are layered on by a dedicated derivation
+ * step.
  */
 export interface ContextPreview {
   readonly targetNodeId: string
+  readonly boundary: ContextBoundaryEligibility
   readonly inheritedNodeIds: readonly string[]
   readonly inheritedEdgeIds: readonly string[]
   readonly excludedGroups: readonly ContextExclusionGroup[]
+}
+
+function isSettled(node: MessageNodeView): boolean {
+  return node.state === 'complete' || node.state === 'error'
+}
+
+function deriveBoundaryEligibility(
+  graph: ProjectionGraphIndex,
+  selected: MessageNodeView,
+): ContextBoundaryEligibility {
+  if (selected.role === 'user') {
+    return Object.freeze({ eligible: false, reason: 'user-message' as const })
+  }
+  if (!isSettled(selected)) {
+    return Object.freeze({ eligible: false, reason: 'turn-open' as const })
+  }
+
+  const targetMessageId = selected.branchTargetMessageId
+  const targetSeq = selected.branchTargetSeq
+  if (targetMessageId === undefined || targetSeq === undefined) {
+    return Object.freeze({ eligible: false, reason: 'turn-tail-unavailable' as const })
+  }
+  const boundary = graph.nodesBySessionId.get(selected.sessionId)?.find(node => (
+    node.messageId === targetMessageId && node.seq === targetSeq
+  ))
+  if (
+    boundary === undefined
+    || boundary.role !== 'assistant'
+    || boundary.seq < selected.seq
+    || (selected.turnId !== undefined && boundary.turnId !== selected.turnId)
+  ) {
+    return Object.freeze({ eligible: false, reason: 'turn-tail-unavailable' as const })
+  }
+  if (!isSettled(boundary)) {
+    return Object.freeze({ eligible: false, reason: 'turn-open' as const })
+  }
+  return Object.freeze({
+    eligible: true,
+    boundaryNodeId: boundary.nodeId,
+    snappedToTurnTail: boundary.nodeId !== selected.nodeId,
+  })
 }
 
 function sessionPrefixThrough(
@@ -211,7 +276,12 @@ export function deriveContextPreview(
   targetNodeId: string,
 ): ContextPreview | undefined {
   const graph = buildProjectionGraphIndex(projection)
-  let cursor = graph.nodesById.get(targetNodeId)
+  const selected = graph.nodesById.get(targetNodeId)
+  if (selected === undefined) return undefined
+  const boundary = deriveBoundaryEligibility(graph, selected)
+  let cursor = boundary.eligible
+    ? graph.nodesById.get(boundary.boundaryNodeId)
+    : selected
   if (cursor === undefined) return undefined
 
   const segments: (readonly MessageNodeView[])[] = []
@@ -249,6 +319,7 @@ export function deriveContextPreview(
   const descendantBranches = descendantBranchGroup(graph)
   return Object.freeze({
     targetNodeId,
+    boundary,
     inheritedNodeIds: Object.freeze(inheritedNodes.map(node => node.nodeId)),
     inheritedEdgeIds: inheritedEdges(graph, inheritedNodes),
     excludedGroups: stabilizeExclusionGroups(graph, inheritedNodes, [
