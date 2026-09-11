@@ -9,8 +9,9 @@
  * moved the durable fork cut off the header (`header.seedLength`) onto a
  * separate `inheritedEventCount` paired with the boolean `header.isSeeded`.
  *
- * Baseline: DeepSeek Harness 0.1.3-alpha.1
- * (d347e703908d0406b7a7ef80e3a0e594d86b2215).
+ * Baseline: DeepSeek Harness 0.1.5-rc.2
+ * (c291e7961a515f6d7af9304e7fd1d257929aef26).
+ * `handle.read` returns `{ eventState, events }` (session format v3).
  *
  * The package still type-checks against its pinned 0.1.1-rc.2 devDependencies,
  * which describe the removed surface, so the new one is declared structurally
@@ -49,10 +50,13 @@ export interface StoredSessionHandle {
   /** Number of leading events inherited from the session's fork parent; `0` when unseeded. */
   readonly inheritedEventCount: number
   /**
-   * Events with `seq >= offset`, at most `length` of them. `offset` is the
-   * first logical event seq to include and defaults to the log start.
+   * Slice of the stored log: events with `seq >= offset`, at most `length`.
+   * At 0.1.5 the result is `{ eventState, events }`, not a bare array.
    */
-  read(offset?: number, length?: number): Promise<readonly SessionEvent[]>
+  read(offset?: number, length?: number): Promise<{
+    readonly eventState: string
+    readonly events: readonly SessionEvent[]
+  }>
   close(): Promise<void>
 }
 
@@ -118,7 +122,7 @@ export async function readColdSessionLog(
 ): Promise<SessionLogRead> {
   const handle = await handlePersistence(persistence).open(sessionId, 'read')
   try {
-    const stored = await handle.read(0)
+    const stored = (await handle.read(0)).events
     return {
       header: handle.header,
       events: [...stored, ...interruptedTurnClosers(stored)],
@@ -133,7 +137,7 @@ export async function readColdSessionLog(
  * Read the stored events with `seq >= fromSeq`.
  *
  * Replaces `SessionPersistence.readFrom`, which was the detached read-from-seq
- * primitive: no synthetic closers, no preparation cache. `handle.read(offset)`
+ * primitive: no synthetic closers, no preparation cache. `handle.read(offset).events`
  * has the same contract — "the events with `seq >= offset`" — so no closers
  * are folded in here either.
  */
@@ -146,7 +150,7 @@ export async function readStoredSessionFrom(
   try {
     return {
       header: handle.header,
-      events: await handle.read(fromSeq),
+      events: (await handle.read(fromSeq)).events,
       seedLength: seedLengthOf(handle.header, handle.inheritedEventCount),
     }
   } finally {

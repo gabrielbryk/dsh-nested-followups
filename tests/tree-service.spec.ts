@@ -64,7 +64,7 @@ class MemoryPersistence extends Service {
   async open(id: SessionId, access: 'read' | 'write'): Promise<{
     header: SessionHeader
     inheritedEventCount: number
-    read: (offset?: number) => Promise<readonly SessionEvent[]>
+    read: (offset?: number) => Promise<{ eventState: string; events: readonly SessionEvent[] }>
     close: () => Promise<void>
   }> {
     if (access !== 'read') throw new Error('the tree projection never opens a write handle')
@@ -75,9 +75,9 @@ class MemoryPersistence extends Service {
     const handle = {
       header: stored.header,
       inheritedEventCount: stored.inheritedEventCount,
-      read: async (offset = 0): Promise<readonly SessionEvent[]> => {
+      read: async (offset = 0): Promise<{ eventState: string; events: readonly SessionEvent[] }> => {
         if (closed) throw new Error('handle closed')
-        return stored.events.filter(event => event.seq >= offset)
+        return { eventState: 'detached', events: stored.events.filter(event => event.seq >= offset) }
       },
       close: async (): Promise<void> => {
         closed = true
