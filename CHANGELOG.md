@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Merged upstream Context Preview: inherited request prefix, exclusion groups
+  (root/branch tail, siblings, descendants), and completed-turn boundary
+  eligibility (`src/client/tree/context-preview.ts`, projection-graph index).
+
 ### Changed
 
 - **Breaking:** ported the Host services to the DeepSeek Harness
